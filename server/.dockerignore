@@ -1,0 +1,5 @@
+node_modules
+lifecycle.db
+lifecycle.db-shm
+lifecycle.db-wal
+npm-debug.log

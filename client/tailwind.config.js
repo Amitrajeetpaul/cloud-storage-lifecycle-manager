@@ -1,0 +1,110 @@
+/** @type {import('tailwindcss').Config} */
+export default {
+  content: ['./index.html', './src/**/*.{js,jsx}'],
+  theme: {
+    extend: {
+      colors: {
+        coral: {
+          DEFAULT: '#FF5A5F',
+          50: '#FFF1F1',
+          100: '#FFE1E2',
+          200: '#FFC5C7',
+          300: '#FFA0A4',
+          400: '#FF7B80',
+          500: '#FF5A5F',
+          600: '#E8393F',
+          700: '#C22429',
+          800: '#9C1E22',
+          900: '#7A1A1D',
+        },
+        navy: {
+          DEFAULT: '#22223B',
+          50: '#F2F2F6',
+          100: '#DEDEE8',
+          200: '#BCBCD1',
+          300: '#9494B0',
+          400: '#6A6A8C',
+          500: '#484868',
+          600: '#33334D',
+          700: '#22223B',
+          800: '#191929',
+          900: '#101018',
+        },
+        cream: {
+          DEFAULT: '#FFF8F3',
+          100: '#FFFFFF',
+          200: '#FFF8F3',
+          300: '#FCEEE3',
+          400: '#F5E1D2',
+        },
+        gold: {
+          DEFAULT: '#FFC94D',
+          50: '#FFF8E8',
+          100: '#FFEFC7',
+          200: '#FFDF94',
+          300: '#FFC94D',
+          400: '#F5B72E',
+          500: '#E0A200',
+          600: '#B58200',
+        },
+        teal: {
+          DEFAULT: '#2EC4B6',
+          50: '#E9FBF9',
+          100: '#C7F4EF',
+          200: '#8FE8DF',
+          300: '#5AD9CC',
+          400: '#2EC4B6',
+          500: '#22A196',
+          600: '#1A7E76',
+        },
+        rose: {
+          DEFAULT: '#F2B8B5',
+          100: '#FBEAE9',
+          200: '#F2B8B5',
+          300: '#E8918D',
+        },
+        tier: {
+          hot: '#FF5A5F',
+          warm: '#FFC94D',
+          cold: '#2EC4B6',
+          archive: '#565676',
+        },
+      },
+      borderRadius: {
+        sm: '8px',
+        DEFAULT: '12px',
+        md: '16px',
+        lg: '20px',
+        xl: '24px',
+        '2xl': '28px',
+        '3xl': '32px',
+      },
+      fontFamily: {
+        sans: [
+          '-apple-system', 'BlinkMacSystemFont', '"Inter"', '"Segoe UI"',
+          'Roboto', '"Helvetica Neue"', 'Arial', 'sans-serif',
+        ],
+      },
+      boxShadow: {
+        soft: '0 2px 8px rgba(34, 34, 59, 0.06), 0 1px 2px rgba(34, 34, 59, 0.04)',
+        card: '0 4px 16px rgba(34, 34, 59, 0.08), 0 1px 3px rgba(34, 34, 59, 0.06)',
+        lifted: '0 12px 32px rgba(34, 34, 59, 0.14), 0 2px 6px rgba(34, 34, 59, 0.08)',
+      },
+      keyframes: {
+        'tier-in': {
+          '0%': { opacity: '0', transform: 'translateY(-6px) scale(0.96)' },
+          '100%': { opacity: '1', transform: 'translateY(0) scale(1)' },
+        },
+        'pulse-once': {
+          '0%': { boxShadow: '0 0 0 0 rgba(46, 196, 182, 0.5)' },
+          '100%': { boxShadow: '0 0 0 10px rgba(46, 196, 182, 0)' },
+        },
+      },
+      animation: {
+        'tier-in': 'tier-in 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
+        'pulse-once': 'pulse-once 0.9s ease-out',
+      },
+    },
+  },
+  plugins: [],
+};
