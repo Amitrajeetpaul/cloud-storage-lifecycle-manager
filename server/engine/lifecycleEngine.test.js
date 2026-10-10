@@ -1,12 +1,9 @@
 import { describe, it, expect, beforeAll } from 'vitest';
-import os from 'node:os';
-import path from 'node:path';
 
-// lifecycleEngine.js imports db.js, which opens a SQLite file as a
-// module-level side effect — point it at a throwaway file so running the
-// test suite never touches (or races with) the real dev database.
-process.env.DB_PATH = path.join(os.tmpdir(), `cslm-test-${Date.now()}.db`);
-
+// lifecycleEngine.js imports db.js, which only constructs a lazy Postgres
+// Pool at module load (no connection attempt until a query runs) — ageDays
+// and findMatchingRule below are pure functions that never touch the DB, so
+// this file needs no live Postgres connection or DATABASE_URL override.
 let ageDays, findMatchingRule;
 beforeAll(async () => {
   ({ ageDays, findMatchingRule } = await import('./lifecycleEngine.js'));

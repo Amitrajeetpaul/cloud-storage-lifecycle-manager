@@ -9,6 +9,8 @@ import simulationRouter from './routes/simulation.js';
 import auditRouter from './routes/audit.js';
 import { logger } from './logger.js';
 import { requireAuth } from './authMiddleware.js';
+import { runEvaluation } from './engine/lifecycleEngine.js';
+import { asyncHandler } from './asyncHandler.js';
 
 // Builds the Express app without starting anything (no MinIO connection, no
 // scheduler, no listening socket) — kept separate from index.js so tests can
@@ -22,6 +24,20 @@ export function createApp({ storageConnected = () => false } = {}) {
 
   app.get('/api/health', (req, res) => res.json({ ok: true, storage_connected: storageConnected() }));
   app.use('/api/auth', authRouter);
+
+  // Production (Vercel) has no persistent process to run a setInterval
+  // scheduler in, so a Vercel Cron Job hits this endpoint on a schedule
+  // instead (see vercel.json). Protected by CRON_SECRET rather than the
+  // admin JWT, since Vercel's cron invoker authenticates with
+  // `Authorization: Bearer $CRON_SECRET`, not a login-derived token.
+  app.post('/api/cron/evaluate', asyncHandler(async (req, res) => {
+    const secret = process.env.CRON_SECRET;
+    if (!secret || req.headers.authorization !== `Bearer ${secret}`) {
+      return res.status(401).json({ error: 'unauthorized' });
+    }
+    const summary = await runEvaluation();
+    res.json(summary);
+  }));
 
   app.use('/api/objects', requireAuth, objectsRouter);
   app.use('/api/rules', requireAuth, rulesRouter);

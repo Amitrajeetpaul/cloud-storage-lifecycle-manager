@@ -2,6 +2,7 @@
   "name": "cloud-storage-lifecycle-manager",
   "version": "1.0.0",
   "private": true,
+  "type": "module",
   "description": "ISM subject project: Cloud Storage Cost and Lifecycle Manager (simulated MinIO-style ILM engine)",
   "scripts": {
     "dev": "concurrently -n SERVER,CLIENT -c blue,magenta \"npm:dev:server\" \"npm:dev:client\"",

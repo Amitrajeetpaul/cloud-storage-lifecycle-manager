@@ -1,19 +1,20 @@
 import { Router } from 'express';
 import { v4 as uuidv4 } from 'uuid';
-import db from '../db.js';
+import { query, withTransaction } from '../db.js';
 import { TIER_ORDER } from '../engine/costEngine.js';
 import { FILE_TYPES } from '../engine/classification.js';
+import { asyncHandler } from '../asyncHandler.js';
 
 const router = Router();
 const VALID_FROM = ['Any', ...TIER_ORDER];
 const VALID_FILE_TYPE = [null, ...FILE_TYPES];
 
-router.get('/', (req, res) => {
-  const rules = db.prepare('SELECT * FROM rules ORDER BY sort_order ASC').all();
-  res.json(rules);
-});
+router.get('/', asyncHandler(async (req, res) => {
+  const { rows } = await query('SELECT * FROM rules ORDER BY sort_order ASC');
+  res.json(rows);
+}));
 
-router.post('/', (req, res) => {
+router.post('/', asyncHandler(async (req, res) => {
   const { name, from_tier, to_tier, condition_days, action, file_type } = req.body;
   if (!name || !VALID_FROM.includes(from_tier) || !['transition', 'delete'].includes(action)) {
     return res.status(400).json({ error: 'invalid rule payload' });
@@ -28,7 +29,8 @@ router.post('/', (req, res) => {
   if (!VALID_FILE_TYPE.includes(normalizedFileType)) {
     return res.status(400).json({ error: `file_type must be one of ${FILE_TYPES.join(', ')}, or omitted for any type` });
   }
-  const maxOrder = db.prepare('SELECT MAX(sort_order) AS m FROM rules').get().m ?? -1;
+  const { rows: maxRows } = await query('SELECT MAX(sort_order) AS m FROM rules');
+  const maxOrder = maxRows[0].m ?? -1;
   const rule = {
     id: uuidv4(),
     name,
@@ -39,15 +41,17 @@ router.post('/', (req, res) => {
     sort_order: maxOrder + 1,
     file_type: normalizedFileType,
   };
-  db.prepare(`
-    INSERT INTO rules (id, name, from_tier, to_tier, condition_days, action, sort_order, file_type)
-    VALUES (@id, @name, @from_tier, @to_tier, @condition_days, @action, @sort_order, @file_type)
-  `).run(rule);
+  await query(
+    `INSERT INTO rules (id, name, from_tier, to_tier, condition_days, action, sort_order, file_type)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+    [rule.id, rule.name, rule.from_tier, rule.to_tier, rule.condition_days, rule.action, rule.sort_order, rule.file_type]
+  );
   res.status(201).json(rule);
-});
+}));
 
-router.put('/:id', (req, res) => {
-  const existing = db.prepare('SELECT * FROM rules WHERE id = ?').get(req.params.id);
+router.put('/:id', asyncHandler(async (req, res) => {
+  const { rows } = await query('SELECT * FROM rules WHERE id = $1', [req.params.id]);
+  const existing = rows[0];
   if (!existing) return res.status(404).json({ error: 'rule not found' });
 
   const { name, from_tier, to_tier, condition_days, action, sort_order, file_type } = req.body;
@@ -64,32 +68,35 @@ router.put('/:id', (req, res) => {
     sort_order: sort_order ?? existing.sort_order,
     file_type: normalizedFileType,
   };
-  db.prepare(`
-    UPDATE rules SET name = @name, from_tier = @from_tier, to_tier = @to_tier,
-      condition_days = @condition_days, action = @action, sort_order = @sort_order, file_type = @file_type
-    WHERE id = @id
-  `).run({ ...updated, id: req.params.id });
+  await query(
+    `UPDATE rules SET name = $1, from_tier = $2, to_tier = $3,
+       condition_days = $4, action = $5, sort_order = $6, file_type = $7
+     WHERE id = $8`,
+    [updated.name, updated.from_tier, updated.to_tier, updated.condition_days, updated.action, updated.sort_order, updated.file_type, req.params.id]
+  );
 
-  res.json(db.prepare('SELECT * FROM rules WHERE id = ?').get(req.params.id));
-});
+  const { rows: updatedRows } = await query('SELECT * FROM rules WHERE id = $1', [req.params.id]);
+  res.json(updatedRows[0]);
+}));
 
-router.post('/reorder', (req, res) => {
+router.post('/reorder', asyncHandler(async (req, res) => {
   const { order } = req.body; // array of rule ids in desired order
   if (!Array.isArray(order)) return res.status(400).json({ error: 'order must be an array of rule ids' });
 
-  const stmt = db.prepare('UPDATE rules SET sort_order = ? WHERE id = ?');
-  const reorder = db.transaction(() => {
-    order.forEach((id, index) => stmt.run(index, id));
+  await withTransaction(async (client) => {
+    for (let index = 0; index < order.length; index++) {
+      await client.query('UPDATE rules SET sort_order = $1 WHERE id = $2', [index, order[index]]);
+    }
   });
-  reorder();
-  res.json(db.prepare('SELECT * FROM rules ORDER BY sort_order ASC').all());
-});
+  const { rows } = await query('SELECT * FROM rules ORDER BY sort_order ASC');
+  res.json(rows);
+}));
 
-router.delete('/:id', (req, res) => {
-  const existing = db.prepare('SELECT * FROM rules WHERE id = ?').get(req.params.id);
-  if (!existing) return res.status(404).json({ error: 'rule not found' });
-  db.prepare('DELETE FROM rules WHERE id = ?').run(req.params.id);
+router.delete('/:id', asyncHandler(async (req, res) => {
+  const { rows } = await query('SELECT * FROM rules WHERE id = $1', [req.params.id]);
+  if (!rows[0]) return res.status(404).json({ error: 'rule not found' });
+  await query('DELETE FROM rules WHERE id = $1', [req.params.id]);
   res.status(204).send();
-});
+}));
 
 export default router;

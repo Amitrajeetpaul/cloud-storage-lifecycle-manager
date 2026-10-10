@@ -1,4 +1,4 @@
-import db from '../db.js';
+import { query, withTransaction } from '../db.js';
 import { TIER_ORDER, totalDailyCost, totalHotEquivalentCost, costByTier } from './costEngine.js';
 import * as storage from '../storage.js';
 import { logger } from '../logger.js';
@@ -6,27 +6,18 @@ import { classifyFileType } from './classification.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-function getRules() {
-  return db.prepare('SELECT * FROM rules ORDER BY sort_order ASC').all();
+async function getRules(client) {
+  const { rows } = await client.query('SELECT * FROM rules ORDER BY sort_order ASC');
+  return rows;
 }
 
-function getActiveObjects() {
-  return db.prepare("SELECT * FROM objects WHERE status = 'active'").all();
+async function getActiveObjects(client) {
+  const { rows } = await client.query("SELECT * FROM objects WHERE status = 'active'");
+  return rows;
 }
-
-const updateTierStmt = db.prepare('UPDATE objects SET tier = ? WHERE id = ?');
-const purgeStmt = db.prepare("UPDATE objects SET status = 'purged' WHERE id = ?");
-const insertAuditStmt = db.prepare(`
-  INSERT INTO audit_log (object_id, object_name, from_tier, to_tier, action, reason, created_at)
-  VALUES (@object_id, @object_name, @from_tier, @to_tier, @action, @reason, @created_at)
-`);
-const insertCostHistoryStmt = db.prepare(`
-  INSERT INTO cost_history (recorded_at, tier, total_cost, hot_equivalent_cost)
-  VALUES (@recorded_at, @tier, @total_cost, @hot_equivalent_cost)
-`);
 
 export function ageDays(object, now = Date.now()) {
-  return (now - object.last_accessed_at) / DAY_MS;
+  return (now - Number(object.last_accessed_at)) / DAY_MS;
 }
 
 /**
@@ -49,7 +40,8 @@ export function findMatchingRule(object, rules, now = Date.now()) {
  * Runs one real-time evaluation pass: checks every active object against
  * the current rule set using the real wall-clock elapsed time since its
  * last access, applies the first matching rule, and snapshots today's cost.
- * Called both by the periodic scheduler (server/index.js) and manually via
+ * Called both by the scheduler (local dev, server/scheduler.js) and the
+ * Vercel cron endpoint in production, plus manually via
  * POST /api/simulation/evaluate for on-demand/demo use.
  */
 export async function runEvaluation(nowFn = () => Date.now()) {
@@ -58,65 +50,55 @@ export async function runEvaluation(nowFn = () => Date.now()) {
   const storageOps = [];
   let purgedCount = 0;
 
-  const applyEvaluation = db.transaction(() => {
-    const rules = getRules();
-    const objects = getActiveObjects();
+  await withTransaction(async (client) => {
+    const rules = await getRules(client);
+    const objects = await getActiveObjects(client);
 
     for (const object of objects) {
       const rule = findMatchingRule(object, rules, now);
       if (!rule) continue;
 
       if (rule.action === 'delete') {
-        purgeStmt.run(object.id);
+        await client.query("UPDATE objects SET status = 'purged' WHERE id = $1", [object.id]);
         purgedCount += 1;
         storageOps.push({ type: 'delete', objectId: object.id, tier: object.tier });
-        insertAuditStmt.run({
-          object_id: object.id,
-          object_name: object.name,
-          from_tier: object.tier,
-          to_tier: null,
-          action: 'delete',
-          reason: rule.name,
-          created_at: now,
-        });
+        await client.query(
+          `INSERT INTO audit_log (object_id, object_name, from_tier, to_tier, action, reason, created_at)
+           VALUES ($1, $2, $3, NULL, 'delete', $4, $5)`,
+          [object.id, object.name, object.tier, rule.name, now]
+        );
       } else if (rule.action === 'transition' && rule.to_tier && rule.to_tier !== object.tier) {
-        updateTierStmt.run(rule.to_tier, object.id);
+        await client.query('UPDATE objects SET tier = $1 WHERE id = $2', [rule.to_tier, object.id]);
         transitions.push({ id: object.id, from: object.tier, to: rule.to_tier });
         storageOps.push({ type: 'move', objectId: object.id, fromTier: object.tier, toTier: rule.to_tier });
-        insertAuditStmt.run({
-          object_id: object.id,
-          object_name: object.name,
-          from_tier: object.tier,
-          to_tier: rule.to_tier,
-          action: 'transition',
-          reason: rule.name,
-          created_at: now,
-        });
+        await client.query(
+          `INSERT INTO audit_log (object_id, object_name, from_tier, to_tier, action, reason, created_at)
+           VALUES ($1, $2, $3, $4, 'transition', $5, $6)`,
+          [object.id, object.name, object.tier, rule.to_tier, rule.name, now]
+        );
       }
     }
 
-    const activeAfter = getActiveObjects();
+    const activeAfter = await getActiveObjects(client);
     const perTier = costByTier(activeAfter);
     const hotEquivalent = totalHotEquivalentCost(activeAfter);
     for (const tier of TIER_ORDER) {
-      insertCostHistoryStmt.run({
-        recorded_at: now,
-        tier,
-        total_cost: perTier[tier] ?? 0,
-        hot_equivalent_cost: tier === 'Hot' ? hotEquivalent : 0,
-      });
+      await client.query(
+        `INSERT INTO cost_history (recorded_at, tier, total_cost, hot_equivalent_cost)
+         VALUES ($1, $2, $3, $4)`,
+        [now, tier, perTier[tier] ?? 0, tier === 'Hot' ? hotEquivalent : 0]
+      );
     }
 
-    db.prepare('UPDATE engine_state SET last_evaluated_at = ? WHERE id = 1').run(now);
+    await client.query('UPDATE engine_state SET last_evaluated_at = $1 WHERE id = 1', [now]);
   });
 
-  applyEvaluation();
-
-  // MinIO calls run after the SQLite transaction commits — the database is
-  // the source of truth, so a MinIO hiccup logs a warning rather than
-  // rolling back the evaluation (this is a demo backend, not the system of
-  // record). A rejection here must never escape to the scheduler's
-  // setInterval callback, which has no caller to catch it.
+  // MinIO calls run after the transaction commits — the database is the
+  // source of truth, so a MinIO hiccup logs a warning rather than rolling
+  // back the evaluation (this is a demo backend, not the system of record).
+  // A rejection here must never escape to the scheduler's setInterval
+  // callback (local dev) or the cron handler (production), neither of which
+  // has a caller to catch it.
   await Promise.all(
     storageOps.map((op) =>
       (op.type === 'delete'
@@ -126,7 +108,7 @@ export async function runEvaluation(nowFn = () => Date.now()) {
     )
   );
 
-  const finalObjects = getActiveObjects();
+  const { rows: finalObjects } = await query("SELECT * FROM objects WHERE status = 'active'");
   return {
     evaluated_at: now,
     transitions_applied: transitions.length,
@@ -136,6 +118,7 @@ export async function runEvaluation(nowFn = () => Date.now()) {
   };
 }
 
-export function getLastEvaluatedAt() {
-  return db.prepare('SELECT last_evaluated_at FROM engine_state WHERE id = 1').get().last_evaluated_at;
+export async function getLastEvaluatedAt() {
+  const { rows } = await query('SELECT last_evaluated_at FROM engine_state WHERE id = 1');
+  return rows[0]?.last_evaluated_at ? Number(rows[0].last_evaluated_at) : null;
 }

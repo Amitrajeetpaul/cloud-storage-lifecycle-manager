@@ -1,11 +1,12 @@
 import { Router } from 'express';
-import db from '../db.js';
+import { query } from '../db.js';
+import { asyncHandler } from '../asyncHandler.js';
 
 const router = Router();
 
-router.get('/', (req, res) => {
-  const rows = db.prepare('SELECT * FROM audit_log ORDER BY id DESC LIMIT 500').all();
+router.get('/', asyncHandler(async (req, res) => {
+  const { rows } = await query('SELECT * FROM audit_log ORDER BY id DESC LIMIT 500');
   res.json(rows);
-});
+}));
 
 export default router;

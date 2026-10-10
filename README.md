@@ -24,12 +24,15 @@ admin dashboard.
 ## Tech stack
 
 - **Frontend:** React (Vite) + Tailwind CSS, custom "ORIGYN" theme, Recharts for charts
-- **Backend:** Node.js + Express REST API
-- **Database:** SQLite via `better-sqlite3` (simulation state: objects, rules, cost history, audit log)
+- **Backend:** Node.js + Express REST API (`server/app.js` holds the routing/middleware; `server/index.js`
+  runs it as a persistent local process, `api/index.js` wraps the same app as a Vercel serverless function)
+- **Database:** Postgres via `pg` (`server/db.js`) — works with any standard provider (Vercel Postgres,
+  Neon, Supabase, Railway, or a local instance) via a single `DATABASE_URL`
 - **Object storage:** [MinIO](https://min.io) — one real bucket per tier (`cslm-hot`, `cslm-warm`,
   `cslm-cold`, `cslm-archive`); every transition/promotion/demotion/delete the engine performs is
   a real `copyObject`/`removeObject` call against MinIO's S3-compatible API, so an object's tier
-  in the dashboard always reflects which real bucket it currently lives in
+  in the dashboard always reflects which real bucket it currently lives in. Any S3-compatible
+  endpoint works here, not just MinIO specifically — just point the `MINIO_*` env vars at it.
 
 ### What's real vs. simulated
 
@@ -48,23 +51,25 @@ admin dashboard.
   `created_at`/`last_accessed_at` by a random real amount, so a fresh demo instantly has objects at
   different real ages instead of everyone needing to wait days for something to transition.
 - The backend runs fine **without** MinIO too — if it can't connect on startup it logs a warning
-  and keeps serving from SQLite (useful if you just want the rule engine/dashboard without
+  and keeps serving from Postgres (useful if you just want the rule engine/dashboard without
   standing up object storage).
 
 ## How to run
 
-### 1. Start MinIO (required for real bucket-backed storage)
+### 1. Start Postgres and MinIO
 
 The easiest way is via the included `docker-compose.yml`, which also defines the `server`/`client`
-containers — but you can start just MinIO and run the app natively with `npm run dev`:
+containers — but you can start just the infra and run the app natively with `npm run dev`:
 
 ```bash
-docker compose up -d minio
+docker compose up -d postgres minio
 ```
 
-This starts MinIO on `localhost:9000` (S3 API) and `localhost:9001` (web console, login
-`minioadmin` / `minioadmin`). Requires Docker; if you don't have it, run a native MinIO binary
-instead (see min.io/download) with the same credentials, or just skip this step — see above.
+This starts Postgres on `localhost:5432` (db `cslm`, user/password `cslm`/`cslm`) and MinIO on
+`localhost:9000` (S3 API) and `localhost:9001` (web console, login `minioadmin` / `minioadmin`).
+Requires Docker; without it, install native Postgres and MinIO instead (e.g. via Homebrew:
+`brew install postgresql@16 minio/stable/minio` — or `brew install minio` if that tap fails, min.io
+has discontinued direct binary downloads) with matching credentials, or just skip MinIO — see above.
 
 ### 2. Run the app
 
@@ -85,18 +90,24 @@ npm install --prefix server
 npm install --prefix client
 ```
 
-The SQLite database file is created automatically at `server/lifecycle.db` on first run, seeded
-with the four default lifecycle rules described below. On startup, the server also connects to
-MinIO and creates the four tier buckets if they don't exist yet.
+The Postgres schema (tables + the four default lifecycle rules described below) is created
+automatically on first startup — see `server/db.js`'s `ready()`. On startup, the server also
+connects to MinIO and creates the four tier buckets if they don't exist yet.
 
-### Fully containerized (server + client + MinIO)
+### Fully containerized (server + client + Postgres + MinIO)
 
 ```bash
 docker compose up --build
 ```
 
-Brings up MinIO, the API (`:4000`), and the built frontend served via nginx (`:8080`) together,
-with the SQLite file and MinIO data persisted in named Docker volumes.
+Brings up Postgres, MinIO, the API (`:4000`), and the built frontend served via nginx (`:8080`)
+together, with both services' data persisted in named Docker volumes.
+
+### Deploying to production
+
+See **[Deploying to Vercel](#deploying-to-vercel)** below — the backend was specifically
+restructured (Postgres instead of SQLite, a Vercel Cron Job instead of an in-process scheduler) so
+the whole app can run there.
 
 ### Environment variables
 
@@ -110,17 +121,63 @@ cp server/.env.example server/.env
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `MINIO_ENDPOINT` | `localhost` | MinIO host |
-| `MINIO_PORT` | `9000` | MinIO S3 API port |
-| `MINIO_USE_SSL` | `false` | Set `true` for an HTTPS MinIO endpoint |
+| `DATABASE_URL` | `postgres://localhost:5432/cslm_dev` | Postgres connection string |
+| `DATABASE_SSL` | `false` | Set `true` if your Postgres provider requires SSL (most hosted ones do) |
+| `MINIO_ENDPOINT` | `localhost` | MinIO/S3 host |
+| `MINIO_PORT` | `9000` | MinIO/S3 API port |
+| `MINIO_USE_SSL` | `false` | Set `true` for an HTTPS endpoint |
 | `MINIO_ACCESS_KEY` | `minioadmin` | Access key |
 | `MINIO_SECRET_KEY` | `minioadmin` | Secret key |
 | `MINIO_BUCKET_PREFIX` | `cslm` | Prefix for the four tier buckets |
-| `EVALUATION_INTERVAL_MS` | `300000` (5 min) | How often the background scheduler re-evaluates all objects |
+| `EVALUATION_INTERVAL_MS` | `300000` (5 min) | How often the local-dev background scheduler re-evaluates all objects (not used on Vercel — see below) |
+| `CRON_SECRET` | *(none)* | Required in production: the bearer token Vercel Cron sends to `POST /api/cron/evaluate`. Not needed locally. |
 | `NODE_ENV` | `development` | Set to `production` to switch HTTP request logging to combined (Apache-style) format |
 | `ADMIN_USERNAME` | `admin` | Dashboard login username |
 | `ADMIN_PASSWORD` | `admin` | Dashboard login password — **change this before any real deployment** |
 | `JWT_SECRET` | *(random per restart)* | Signs login session tokens — set explicitly so sessions survive a server restart |
+
+## Deploying to Vercel
+
+Vercel can't run the backend as originally built — a serverless function can't keep a `setInterval`
+scheduler alive between requests, and SQLite's local file would reset on every cold start. The
+backend was restructured specifically to fix both:
+
+- **Postgres instead of SQLite** (`server/db.js`, via `pg`) — any standard provider works: Vercel
+  Postgres, Neon, Supabase, Railway, etc. Set `DATABASE_URL` (and `DATABASE_SSL=true` for most
+  hosted providers) in the Vercel project's environment variables.
+- **Vercel Cron instead of a background `setInterval`** — `api/index.js` wraps the same Express app
+  (`server/app.js`) as a serverless function; `vercel.json`'s `crons` entry calls
+  `POST /api/cron/evaluate` on a schedule, authenticated with `CRON_SECRET` (which Vercel sends
+  automatically as `Authorization: Bearer $CRON_SECRET`) rather than the admin JWT. **Vercel's free
+  Hobby plan historically limits Cron Jobs to once per day** — `vercel.json` here defaults to
+  `0 0 * * *` (daily) for that reason; tighten it (e.g. `*/5 * * * *`) if you're on a paid plan that
+  allows more frequent schedules. Either way, the **"Run evaluation now" button always works**
+  regardless of cron frequency, since it hits the normal authenticated `/api/simulation/evaluate`
+  route directly, not the cron path.
+- **MinIO (or any S3-compatible store) must be reachable over the network** — a Vercel function
+  can't host MinIO itself (it's a persistent server, not a request handler). Point the `MINIO_*` env
+  vars at a MinIO instance you host elsewhere (Railway, a VPS, etc.) or at real AWS S3 (the `minio`
+  npm SDK is S3-API compatible, so real S3 credentials work as a drop-in).
+
+### Steps
+
+1. Provision a Postgres database (Vercel Postgres from the project's Storage tab, or an external
+   provider like Neon) and copy its connection string.
+2. Make sure you have a reachable MinIO/S3 endpoint and credentials (see above).
+3. In the Vercel project settings, set the environment variables from the table above —
+   at minimum `DATABASE_URL`, `DATABASE_SSL=true` (for most hosted Postgres), the `MINIO_*` vars,
+   `CRON_SECRET`, `JWT_SECRET`, and `ADMIN_USERNAME`/`ADMIN_PASSWORD` (don't leave these as the
+   `admin`/`admin` defaults in production).
+4. Deploy — Vercel picks up `vercel.json` automatically: it builds `client/` as the static site
+   (`buildCommand`/`outputDirectory`), deploys `api/index.js` as a serverless function handling all
+   `/api/*` routes (via the `rewrites` entry), and registers the Cron Job.
+5. On first request, `api/index.js` awaits `ready()` (creates the Postgres schema + seeds the
+   default rules if the tables don't exist yet) before handling anything — no separate migration
+   step needed.
+
+Local dev is unaffected by any of this — `npm run dev` still runs the Express app as a normal
+persistent process (`server/index.js`) with the real `setInterval` scheduler, exactly as before;
+`api/index.js` and `vercel.json` only come into play on Vercel.
 
 ## Authentication
 
@@ -215,14 +272,27 @@ engine, just with an additional observed-behavior input instead of only a fixed 
   thrown error reaches Express's global error-handling middleware in `index.js` and returns a
   clean `500` instead of silently hanging the request (a real gap in naive Express 4 async route
   handlers). Unhandled promise rejections are also logged rather than crashing the process.
-- **Tests** — `npm test` (inside `server/`) runs a `vitest` suite (41 tests). Pure engine logic
-  (cost math, rule-matching with file-type filtering, classification/optimizer heuristics) is unit
-  tested directly; the auth, file upload/download, and optimizer *routes* are tested end-to-end
-  with `supertest` against the real Express app (`server/app.js`, split out from `index.js`
-  specifically so it can be imported without starting a server or needing a live MinIO connection
-  — storage calls are mocked in those tests).
-- **Background scheduler, not a manual loop** — the lifecycle engine runs on its own interval
-  server-side (see above), independent of whether anyone has the dashboard open.
+- **Tests** — `npm test` (inside `server/`) runs a `vitest` suite (41 tests) against a real,
+  throwaway Postgres database per test file (`server/testUtils.js` creates and drops one per file,
+  so parallel test files never race each other's data — see "Running the tests" below). Pure engine
+  logic (cost math, rule-matching with file-type filtering, classification/optimizer heuristics) is
+  unit tested directly; the auth, file upload/download, and optimizer *routes* are tested end-to-end
+  with `supertest` against the real Express app (`server/app.js`, split out from `index.js`/
+  `api/index.js` specifically so it can be imported without starting a server — storage/MinIO calls
+  are mocked in those tests).
+- **Background scheduler locally, Vercel Cron in production** — see
+  [Deploying to Vercel](#deploying-to-vercel) above for why these differ.
+
+### Running the tests
+
+Requires a local Postgres reachable at `postgres://localhost:5432/postgres` (the test helper
+connects there to create/drop each test file's throwaway database) — e.g.
+`brew install postgresql@16 && brew services start postgresql@16` on macOS. Then:
+
+```bash
+cd server
+npm test
+```
 
 ## Cost model
 
@@ -258,11 +328,16 @@ the client in `client/src/tierConfig.js` for display purposes:
 
 ```
 cloud-storage-lifecycle-manager/
-├── server/            Express API + SQLite + lifecycle/cost engines + storage.js (MinIO client)
-├── client/             React (Vite) + Tailwind dashboard
-├── docker-compose.yml  MinIO + server + client, for a fully containerized run
-└── package.json        root scripts (concurrently runs server + client for local dev)
+├── server/             Express app, routes, lifecycle/cost/classification/optimizer engines,
+│                       Postgres (db.js), storage.js (MinIO/S3 client); app.js is the routing
+│                       surface, index.js runs it as a persistent process for local dev
+├── api/index.js        Wraps server/app.js as a Vercel serverless function (production)
+├── client/              React (Vite) + Tailwind dashboard
+├── docker-compose.yml   Postgres + MinIO + server + client, for a fully containerized run
+├── vercel.json          Vercel build/routing/cron config — see "Deploying to Vercel" above
+└── package.json         root scripts (concurrently runs server + client for local dev)
 ```
 
 See the API route files under `server/routes/` for the full REST surface (`/api/objects`,
-`/api/rules`, `/api/simulation`, `/api/audit`).
+`/api/rules`, `/api/simulation`, `/api/audit`, `/api/auth`, plus `/api/cron/evaluate` defined
+directly in `server/app.js`).

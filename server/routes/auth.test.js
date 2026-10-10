@@ -1,20 +1,25 @@
-import { describe, it, expect, beforeAll } from 'vitest';
-import os from 'node:os';
-import path from 'node:path';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import request from 'supertest';
+import { createTestDatabase } from '../testUtils.js';
 
-// Isolated DB + predictable credentials, set before any module that reads
-// them is imported (db.js and auth.js both read process.env at module-load
-// time) — same pattern as engine/lifecycleEngine.test.js.
-process.env.DB_PATH = path.join(os.tmpdir(), `cslm-test-auth-${Date.now()}.db`);
+// Predictable credentials, set before auth.js (which reads them at
+// module-load time) is imported via app.js below.
 process.env.ADMIN_USERNAME = 'testadmin';
 process.env.ADMIN_PASSWORD = 'testpass123';
 process.env.JWT_SECRET = 'test-secret-not-for-production';
 
 let app;
+let cleanupDb;
 beforeAll(async () => {
+  cleanupDb = await createTestDatabase();
+  const { ready } = await import('../db.js');
+  await ready();
   const { createApp } = await import('../app.js');
   app = createApp();
+});
+
+afterAll(async () => {
+  await cleanupDb();
 });
 
 describe('POST /api/auth/login', () => {

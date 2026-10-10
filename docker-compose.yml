@@ -1,4 +1,19 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_DB=cslm
+      - POSTGRES_USER=cslm
+      - POSTGRES_PASSWORD=cslm
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cslm -d cslm"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
   minio:
     image: minio/minio:latest
     command: server /data --console-address ":9001"
@@ -24,7 +39,7 @@ services:
     environment:
       - PORT=4000
       - NODE_ENV=production
-      - DB_PATH=/app/data/lifecycle.db
+      - DATABASE_URL=postgres://cslm:cslm@postgres:5432/cslm
       - MINIO_ENDPOINT=minio
       - MINIO_PORT=9000
       - MINIO_USE_SSL=false
@@ -35,9 +50,9 @@ services:
       - ADMIN_USERNAME=admin
       - ADMIN_PASSWORD=admin
       - JWT_SECRET=
-    volumes:
-      - db-data:/app/data
     depends_on:
+      postgres:
+        condition: service_healthy
       minio:
         condition: service_healthy
     restart: unless-stopped
@@ -51,5 +66,5 @@ services:
     restart: unless-stopped
 
 volumes:
-  db-data:
+  pg-data:
   minio-data:

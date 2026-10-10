@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import multer from 'multer';
 import { v4 as uuidv4 } from 'uuid';
-import db from '../db.js';
+import { query, withTransaction } from '../db.js';
 import { TIER_ORDER } from '../engine/costEngine.js';
 import * as storage from '../storage.js';
 import { logger } from '../logger.js';
@@ -42,10 +42,10 @@ function randomObjectPayload(now) {
   };
 }
 
-router.get('/', (req, res) => {
-  const objects = db.prepare('SELECT * FROM objects ORDER BY created_at DESC').all();
-  res.json(enrichObjects(objects));
-});
+router.get('/', asyncHandler(async (req, res) => {
+  const { rows } = await query('SELECT * FROM objects ORDER BY created_at DESC');
+  res.json(await enrichObjects(rows));
+}));
 
 router.post('/', asyncHandler(async (req, res) => {
   const { name, size_mb, tier } = req.body;
@@ -63,10 +63,11 @@ router.post('/', asyncHandler(async (req, res) => {
     last_accessed_at: now,
     status: 'active',
   };
-  db.prepare(`
-    INSERT INTO objects (id, name, size_mb, tier, created_at, last_accessed_at, status)
-    VALUES (@id, @name, @size_mb, @tier, @created_at, @last_accessed_at, @status)
-  `).run(obj);
+  await query(
+    `INSERT INTO objects (id, name, size_mb, tier, created_at, last_accessed_at, status)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+    [obj.id, obj.name, obj.size_mb, obj.tier, obj.created_at, obj.last_accessed_at, obj.status]
+  );
   await storage.putObject(obj).catch(warnOnStorageFailure(`putObject ${obj.id}`));
   res.status(201).json(obj);
 }));
@@ -89,18 +90,20 @@ router.post('/upload', upload.single('file'), asyncHandler(async (req, res) => {
     last_accessed_at: now,
     status: 'active',
     content_type: req.file.mimetype || null,
-    is_real_upload: 1,
+    is_real_upload: true,
   };
-  db.prepare(`
-    INSERT INTO objects (id, name, size_mb, tier, created_at, last_accessed_at, status, content_type, is_real_upload)
-    VALUES (@id, @name, @size_mb, @tier, @created_at, @last_accessed_at, @status, @content_type, @is_real_upload)
-  `).run(obj);
+  await query(
+    `INSERT INTO objects (id, name, size_mb, tier, created_at, last_accessed_at, status, content_type, is_real_upload)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+    [obj.id, obj.name, obj.size_mb, obj.tier, obj.created_at, obj.last_accessed_at, obj.status, obj.content_type, obj.is_real_upload]
+  );
   await storage.putObject(obj, req.file).catch(warnOnStorageFailure(`putObject ${obj.id}`));
   res.status(201).json(obj);
 }));
 
 router.get('/:id/download', asyncHandler(async (req, res) => {
-  const existing = db.prepare('SELECT * FROM objects WHERE id = ?').get(req.params.id);
+  const { rows } = await query('SELECT * FROM objects WHERE id = $1', [req.params.id]);
+  const existing = rows[0];
   if (!existing || existing.status !== 'active') return res.status(404).json({ error: 'object not found' });
   if (!existing.is_real_upload) {
     return res.status(400).json({ error: 'this object is simulated and has no real file content to download' });
@@ -118,19 +121,18 @@ router.get('/:id/download', asyncHandler(async (req, res) => {
 router.post('/seed', asyncHandler(async (req, res) => {
   const count = Number.isInteger(req.body?.count) ? req.body.count : 20;
   const now = Date.now();
-  const insert = db.prepare(`
-    INSERT INTO objects (id, name, size_mb, tier, created_at, last_accessed_at, status)
-    VALUES (@id, @name, @size_mb, @tier, @created_at, @last_accessed_at, @status)
-  `);
   const created = [];
-  const insertMany = db.transaction(() => {
+  await withTransaction(async (client) => {
     for (let i = 0; i < count; i++) {
       const obj = randomObjectPayload(now);
-      insert.run(obj);
+      await client.query(
+        `INSERT INTO objects (id, name, size_mb, tier, created_at, last_accessed_at, status)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [obj.id, obj.name, obj.size_mb, obj.tier, obj.created_at, obj.last_accessed_at, obj.status]
+      );
       created.push(obj);
     }
   });
-  insertMany();
   await Promise.all(
     created.map((obj) => storage.putObject(obj).catch(warnOnStorageFailure(`putObject ${obj.id}`)))
   );
@@ -142,47 +144,54 @@ router.patch('/:id/tier', asyncHandler(async (req, res) => {
   if (!TIER_ORDER.includes(tier)) {
     return res.status(400).json({ error: `tier must be one of ${TIER_ORDER.join(', ')}` });
   }
-  const existing = db.prepare('SELECT * FROM objects WHERE id = ?').get(req.params.id);
+  const { rows } = await query('SELECT * FROM objects WHERE id = $1', [req.params.id]);
+  const existing = rows[0];
   if (!existing) return res.status(404).json({ error: 'object not found' });
 
-  db.prepare('UPDATE objects SET tier = ? WHERE id = ?').run(tier, req.params.id);
-  db.prepare(`
-    INSERT INTO audit_log (object_id, object_name, from_tier, to_tier, action, reason, created_at)
-    VALUES (?, ?, ?, ?, 'transition', 'Manual override', ?)
-  `).run(existing.id, existing.name, existing.tier, tier, Date.now());
+  await query('UPDATE objects SET tier = $1 WHERE id = $2', [tier, req.params.id]);
+  await query(
+    `INSERT INTO audit_log (object_id, object_name, from_tier, to_tier, action, reason, created_at)
+     VALUES ($1, $2, $3, $4, 'transition', 'Manual override', $5)`,
+    [existing.id, existing.name, existing.tier, tier, Date.now()]
+  );
 
   if (tier !== existing.tier) {
     await storage.moveObject(existing.id, existing.tier, tier).catch(warnOnStorageFailure(`moveObject ${existing.id}`));
   }
 
-  const updated = db.prepare('SELECT * FROM objects WHERE id = ?').get(req.params.id);
-  res.json(updated);
+  const { rows: updatedRows } = await query('SELECT * FROM objects WHERE id = $1', [req.params.id]);
+  res.json(updatedRows[0]);
 }));
 
-router.patch('/:id/access', (req, res) => {
-  const existing = db.prepare('SELECT * FROM objects WHERE id = ?').get(req.params.id);
+router.patch('/:id/access', asyncHandler(async (req, res) => {
+  const { rows } = await query('SELECT * FROM objects WHERE id = $1', [req.params.id]);
+  const existing = rows[0];
   if (!existing) return res.status(404).json({ error: 'object not found' });
   if (existing.status !== 'active') return res.status(400).json({ error: 'object is not active' });
 
   const now = Date.now();
-  db.prepare('UPDATE objects SET last_accessed_at = ? WHERE id = ?').run(now, req.params.id);
-  db.prepare(`
-    INSERT INTO audit_log (object_id, object_name, from_tier, to_tier, action, reason, created_at)
-    VALUES (?, ?, ?, ?, 'access', 'Manual access', ?)
-  `).run(existing.id, existing.name, existing.tier, existing.tier, now);
+  await query('UPDATE objects SET last_accessed_at = $1 WHERE id = $2', [now, req.params.id]);
+  await query(
+    `INSERT INTO audit_log (object_id, object_name, from_tier, to_tier, action, reason, created_at)
+     VALUES ($1, $2, $3, $4, 'access', 'Manual access', $5)`,
+    [existing.id, existing.name, existing.tier, existing.tier, now]
+  );
 
-  res.json(db.prepare('SELECT * FROM objects WHERE id = ?').get(req.params.id));
-});
+  const { rows: updatedRows } = await query('SELECT * FROM objects WHERE id = $1', [req.params.id]);
+  res.json(updatedRows[0]);
+}));
 
 router.delete('/:id', asyncHandler(async (req, res) => {
-  const existing = db.prepare('SELECT * FROM objects WHERE id = ?').get(req.params.id);
+  const { rows } = await query('SELECT * FROM objects WHERE id = $1', [req.params.id]);
+  const existing = rows[0];
   if (!existing) return res.status(404).json({ error: 'object not found' });
 
-  db.prepare("UPDATE objects SET status = 'purged' WHERE id = ?").run(req.params.id);
-  db.prepare(`
-    INSERT INTO audit_log (object_id, object_name, from_tier, to_tier, action, reason, created_at)
-    VALUES (?, ?, ?, NULL, 'delete', 'Manual delete', ?)
-  `).run(existing.id, existing.name, existing.tier, Date.now());
+  await query("UPDATE objects SET status = 'purged' WHERE id = $1", [req.params.id]);
+  await query(
+    `INSERT INTO audit_log (object_id, object_name, from_tier, to_tier, action, reason, created_at)
+     VALUES ($1, $2, $3, NULL, 'delete', 'Manual delete', $4)`,
+    [existing.id, existing.name, existing.tier, Date.now()]
+  );
 
   await storage.removeObject(existing.id, existing.tier).catch(warnOnStorageFailure(`removeObject ${existing.id}`));
 

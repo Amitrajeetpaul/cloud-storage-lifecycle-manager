@@ -1,10 +1,8 @@
-import { describe, it, expect, beforeAll, vi } from 'vitest';
-import os from 'node:os';
-import path from 'node:path';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { Readable } from 'node:stream';
 import request from 'supertest';
+import { createTestDatabase } from '../testUtils.js';
 
-process.env.DB_PATH = path.join(os.tmpdir(), `cslm-test-upload-${Date.now()}.db`);
 process.env.ADMIN_USERNAME = 'testadmin';
 process.env.ADMIN_PASSWORD = 'testpass123';
 process.env.JWT_SECRET = 'test-secret-not-for-production';
@@ -30,11 +28,19 @@ vi.mock('../storage.js', () => ({
 
 let app;
 let token;
+let cleanupDb;
 beforeAll(async () => {
+  cleanupDb = await createTestDatabase();
+  const { ready } = await import('../db.js');
+  await ready();
   const { createApp } = await import('../app.js');
   app = createApp();
   const login = await request(app).post('/api/auth/login').send({ username: 'testadmin', password: 'testpass123' });
   token = login.body.token;
+});
+
+afterAll(async () => {
+  await cleanupDb();
 });
 
 function auth(req) {
@@ -57,7 +63,7 @@ describe('POST /api/objects/upload', () => {
     expect(res.body.name).toBe('test-report.pdf');
     expect(res.body.size_mb).toBeCloseTo(2, 5);
     expect(res.body.content_type).toBe('application/pdf');
-    expect(res.body.is_real_upload).toBe(1);
+    expect(res.body.is_real_upload).toBe(true);
   });
 
   it('defaults to the Hot tier when an invalid tier is given', async () => {
