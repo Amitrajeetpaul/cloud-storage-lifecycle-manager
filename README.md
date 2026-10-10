@@ -7,6 +7,20 @@ just a database simulation. Objects move automatically across storage tiers — 
 → Archive** — based on configurable rules, with real-time cost tracking, a rule engine, and an
 admin dashboard.
 
+![Dashboard](docs/screenshots/dashboard.jpg)
+*Live dashboard: tier columns, the cost-optimization suggestion banner, and the actual-vs-all-Hot savings chart.*
+
+<details>
+<summary>More screenshots (Objects table, Rules editor)</summary>
+
+![Objects table](docs/screenshots/objects-table.jpg)
+*Objects table with file-type classification, access-frequency badges, and tier filters.*
+
+![Rules editor](docs/screenshots/rules.jpg)
+*Lifecycle rules, including the optional file-type filter per rule.*
+
+</details>
+
 ## Tech stack
 
 - **Frontend:** React (Vite) + Tailwind CSS, custom "ORIGYN" theme, Recharts for charts
@@ -201,9 +215,12 @@ engine, just with an additional observed-behavior input instead of only a fixed 
   thrown error reaches Express's global error-handling middleware in `index.js` and returns a
   clean `500` instead of silently hanging the request (a real gap in naive Express 4 async route
   handlers). Unhandled promise rejections are also logged rather than crashing the process.
-- **Tests** — `npm test` (inside `server/`) runs a `vitest` suite (21 tests) covering the cost math
-  (`costEngine.test.js`), rule-matching including file-type filtering (`lifecycleEngine.test.js`),
-  and the classification/optimizer logic (`classification.test.js`).
+- **Tests** — `npm test` (inside `server/`) runs a `vitest` suite (41 tests). Pure engine logic
+  (cost math, rule-matching with file-type filtering, classification/optimizer heuristics) is unit
+  tested directly; the auth, file upload/download, and optimizer *routes* are tested end-to-end
+  with `supertest` against the real Express app (`server/app.js`, split out from `index.js`
+  specifically so it can be imported without starting a server or needing a live MinIO connection
+  — storage calls are mocked in those tests).
 - **Background scheduler, not a manual loop** — the lifecycle engine runs on its own interval
   server-side (see above), independent of whether anyone has the dashboard open.
 
