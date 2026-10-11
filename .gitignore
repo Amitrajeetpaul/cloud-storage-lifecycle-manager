@@ -9,3 +9,8 @@ server/lifecycle.db-wal
 .env
 .env.*
 !.env.example
+.vercel
+.env*
+.agents/
+.claude/
+skills-lock.json

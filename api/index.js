@@ -1,4 +1,7 @@
-import 'dotenv/config';
+// No `dotenv/config` here on purpose: Vercel injects configured environment
+// variables directly into process.env at runtime, so there's no .env file to
+// load in production — and dotenv lives in server/node_modules, a sibling
+// directory not reachable from this file's position in the deployed bundle.
 import { ready } from '../server/db.js';
 import { createApp } from '../server/app.js';
 import { checkConnection, ensureBucketsExist } from '../server/storage.js';
