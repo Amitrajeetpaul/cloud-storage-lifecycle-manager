@@ -114,9 +114,40 @@ function RuleRow({ rule, index, total, onUpdateRule, onDeleteRule, onMove }) {
   );
 }
 
-export default function RuleBuilder({ rules, onCreateRule, onUpdateRule, onReorderRules, onDeleteRule }) {
+function TemplateCard({ template, onApply }) {
+  const [applying, setApplying] = useState(false);
+  const handleApply = async () => {
+    setApplying(true);
+    try {
+      await onApply(template.id);
+    } finally {
+      setApplying(false);
+    }
+  };
+  return (
+    <div className="rounded-xl border border-navy-50 bg-white p-3 shadow-soft">
+      <div className="flex items-start justify-between gap-2">
+        <div>
+          <p className="text-sm font-semibold text-navy-700">{template.name}</p>
+          <p className="mt-0.5 text-xs text-navy-400">{template.description}</p>
+        </div>
+        <button
+          type="button"
+          onClick={handleApply}
+          disabled={applying}
+          className="focus-ring shrink-0 rounded-lg border border-navy-100 px-3 py-1.5 text-xs font-medium text-navy-500 transition hover:border-coral-300 hover:text-coral-600 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {applying ? 'Applying…' : `Apply (${template.rule_count} rule${template.rule_count === 1 ? '' : 's'})`}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+export default function RuleBuilder({ rules, templates, onApplyTemplate, onCreateRule, onUpdateRule, onReorderRules, onDeleteRule }) {
   const [form, setForm] = useState(emptyForm);
   const [error, setError] = useState(null);
+  const [templatesOpen, setTemplatesOpen] = useState(false);
 
   const sorted = [...rules].sort((a, b) => a.sort_order - b.sort_order);
 
@@ -139,7 +170,32 @@ export default function RuleBuilder({ rules, onCreateRule, onUpdateRule, onReord
   };
 
   return (
-    <div className="grid grid-cols-1 gap-5 lg:grid-cols-[1.1fr_1fr]">
+    <div className="space-y-5">
+      {templates?.length > 0 && (
+        <div className="rounded-2xl bg-white p-5 shadow-card">
+          <button
+            type="button"
+            onClick={() => setTemplatesOpen((v) => !v)}
+            aria-expanded={templatesOpen}
+            className="focus-ring flex w-full items-center justify-between text-left"
+          >
+            <span className="text-base font-semibold text-navy-700">📋 Compliance rule templates</span>
+            <span className="text-navy-400">{templatesOpen ? '−' : '+'}</span>
+          </button>
+          {templatesOpen && (
+            <div className="mt-3 space-y-2">
+              <p className="text-xs text-navy-400">
+                One-click starting points for common retention patterns — applies as normal, fully editable rules.
+              </p>
+              {templates.map((template) => (
+                <TemplateCard key={template.id} template={template} onApply={onApplyTemplate} />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 gap-5 lg:grid-cols-[1.1fr_1fr]">
       <div className="rounded-2xl bg-white p-5 shadow-card">
         <h2 className="mb-1 text-base font-semibold text-navy-700">Lifecycle rules</h2>
         <p className="mb-4 text-xs text-navy-400">Evaluated top to bottom; the first match wins per object, per tick.</p>
@@ -237,6 +293,7 @@ export default function RuleBuilder({ rules, onCreateRule, onUpdateRule, onReord
           Add rule
         </button>
       </form>
+      </div>
     </div>
   );
 }

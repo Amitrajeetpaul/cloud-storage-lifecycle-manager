@@ -263,6 +263,29 @@ layers sit on top of it:
 None of this is AI/ML — it's the same category of deterministic, rule-based logic as the core
 engine, just with an additional observed-behavior input instead of only a fixed idle-time timer.
 
+### Forecast, compliance templates, and cross-provider comparison
+
+Three more additions built on top of the above:
+
+- **Upcoming-transitions forecast** (`server/engine/forecast.js`, `GET /api/simulation/forecast`) —
+  for every active object, finds the *next* rule that will apply once more idle time passes (the
+  mirror image of the rule engine's "what matches right now") and reports real days remaining,
+  plus a real-vs-real access *trend* (Rising/Stable/Declining — comparing the last 15 days of
+  observed access activity to the 15 before that). Surfaced as a sorted "what's about to happen"
+  list in the dashboard, instead of only an audit trail of what already happened.
+- **Compliance rule templates** (`server/engine/ruleTemplates.js`, `GET /api/rules/templates`,
+  `POST /api/rules/templates/:id/apply`) — one-click bundles of rules mapped to common real-world
+  retention patterns (GDPR right-to-be-forgotten, financial/HIPAA multi-year retention, log
+  retention). Applying one just creates normal, fully editable rules — there's no persistent
+  "template" state afterward.
+- **Cross-provider cost comparison** (`server/engine/providerRates.js`,
+  `GET /api/simulation/provider-comparison`) — takes your *exact* current tier distribution (same
+  objects, same sizes, same tiers) and prices it against approximate published AWS S3 / Azure Blob
+  / Google Cloud Storage list rates. These are illustrative, not live pricing, and this app's own
+  rates are intentionally stylized for visible demo contrast rather than tuned to match real-world
+  numbers — so compare tier-to-tier *ratios*, not absolute totals, between this app and the real
+  providers.
+
 ## Production-readiness notes
 
 - **Structured logging** — `server/logger.js` timestamps and levels every server log; HTTP
@@ -272,7 +295,7 @@ engine, just with an additional observed-behavior input instead of only a fixed 
   thrown error reaches Express's global error-handling middleware in `index.js` and returns a
   clean `500` instead of silently hanging the request (a real gap in naive Express 4 async route
   handlers). Unhandled promise rejections are also logged rather than crashing the process.
-- **Tests** — `npm test` (inside `server/`) runs a `vitest` suite (41 tests) against a real,
+- **Tests** — `npm test` (inside `server/`) runs a `vitest` suite (56 tests) against a real,
   throwaway Postgres database per test file (`server/testUtils.js` creates and drops one per file,
   so parallel test files never race each other's data — see "Running the tests" below). Pure engine
   logic (cost math, rule-matching with file-type filtering, classification/optimizer heuristics) is

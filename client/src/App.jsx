@@ -16,6 +16,9 @@ export default function App() {
   const [error, setError] = useState(null);
   const [lastEvaluationSummary, setLastEvaluationSummary] = useState(null);
   const [optimization, setOptimization] = useState(null);
+  const [forecast, setForecast] = useState([]);
+  const [providerComparison, setProviderComparison] = useState(null);
+  const [ruleTemplates, setRuleTemplates] = useState([]);
 
   // Wraps an action so an expired/invalid session bounces back to the login
   // screen instead of surfacing "authentication required" as a generic error.
@@ -33,13 +36,16 @@ export default function App() {
 
   const refreshAll = useCallback(async () => {
     try {
-      const [objs, rls, state, hist, aud, opt] = await Promise.all([
+      const [objs, rls, state, hist, aud, opt, fc, cmp, tmpl] = await Promise.all([
         api.listObjects(),
         api.listRules(),
         api.getEngineState(),
         api.getHistory(),
         api.getAudit(),
         api.getOptimizationSuggestions(),
+        api.getForecast(),
+        api.getProviderComparison(),
+        api.listRuleTemplates(),
       ]);
       setObjects(objs);
       setRules(rls);
@@ -47,6 +53,9 @@ export default function App() {
       setHistory(hist);
       setAudit(aud);
       setOptimization(opt);
+      setForecast(fc.forecast);
+      setProviderComparison(cmp);
+      setRuleTemplates(tmpl);
       setError(null);
     } catch (e) {
       if (e instanceof AuthError) {
@@ -150,6 +159,11 @@ export default function App() {
     await refreshAll();
   }), [refreshAll, guard]);
 
+  const handleApplyRuleTemplate = useCallback(guard(async (id) => {
+    await api.applyRuleTemplate(id);
+    await refreshAll();
+  }), [refreshAll, guard]);
+
   if (!authed) {
     return <LoginForm onLogin={handleLogin} />;
   }
@@ -165,6 +179,10 @@ export default function App() {
       error={error}
       lastEvaluationSummary={lastEvaluationSummary}
       optimization={optimization}
+      forecast={forecast}
+      providerComparison={providerComparison}
+      ruleTemplates={ruleTemplates}
+      onApplyRuleTemplate={handleApplyRuleTemplate}
       onEvaluateNow={handleEvaluateNow}
       onApplyOptimization={handleApplyOptimization}
       onSeed={handleSeed}

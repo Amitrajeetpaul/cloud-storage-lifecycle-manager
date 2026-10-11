@@ -3,6 +3,8 @@ import { query } from '../db.js';
 import { runEvaluation, getLastEvaluatedAt } from '../engine/lifecycleEngine.js';
 import { getSchedulerState } from '../scheduler.js';
 import { getOptimizationSuggestions, applyOptimization } from '../engine/optimizer.js';
+import { getForecast } from '../engine/forecast.js';
+import { getProviderComparison } from '../engine/providerRates.js';
 import { asyncHandler } from '../asyncHandler.js';
 
 const router = Router();
@@ -33,6 +35,16 @@ router.get('/state', asyncHandler(async (req, res) => {
     evaluation_interval_ms: interval_ms,
     server_time: Date.now(),
   });
+}));
+
+router.get('/forecast', asyncHandler(async (req, res) => {
+  const forecast = await getForecast();
+  res.json({ forecast });
+}));
+
+router.get('/provider-comparison', asyncHandler(async (req, res) => {
+  const comparison = await getProviderComparison();
+  res.json(comparison);
 }));
 
 router.get('/history', asyncHandler(async (req, res) => {

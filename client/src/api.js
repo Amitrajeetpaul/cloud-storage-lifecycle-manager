@@ -97,6 +97,8 @@ export const api = {
   updateRule: (id, payload) => request(`/rules/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
   reorderRules: (order) => request('/rules/reorder', { method: 'POST', body: JSON.stringify({ order }) }),
   deleteRule: (id) => request(`/rules/${id}`, { method: 'DELETE' }),
+  listRuleTemplates: () => request('/rules/templates'),
+  applyRuleTemplate: (id) => request(`/rules/templates/${id}/apply`, { method: 'POST' }),
 
   // simulation
   evaluateNow: () => request('/simulation/evaluate', { method: 'POST' }),
@@ -104,6 +106,8 @@ export const api = {
   getHistory: () => request('/simulation/history'),
   getOptimizationSuggestions: () => request('/simulation/optimize'),
   applyOptimization: () => request('/simulation/optimize/apply', { method: 'POST' }),
+  getForecast: () => request('/simulation/forecast'),
+  getProviderComparison: () => request('/simulation/provider-comparison'),
 
   // audit
   getAudit: () => request('/audit'),

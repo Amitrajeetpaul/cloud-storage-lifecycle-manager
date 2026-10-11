@@ -7,10 +7,13 @@ import ObjectTable from './ObjectTable.jsx';
 import RuleBuilder from './RuleBuilder.jsx';
 import AuditLog from './AuditLog.jsx';
 import OptimizePanel from './OptimizePanel.jsx';
+import ForecastPanel from './ForecastPanel.jsx';
+import ProviderComparison from './ProviderComparison.jsx';
 
 export default function Dashboard(props) {
   const {
     objects, rules, engineState, history, audit, loading, error, optimization,
+    forecast, providerComparison, ruleTemplates, onApplyRuleTemplate,
     onEvaluateNow, onApplyOptimization, onSeed, onCreateObject, onUploadObject, onDownloadObject,
     onSetTier, onMarkAccessed, onDeleteObject,
     onCreateRule, onUpdateRule, onReorderRules, onDeleteRule, onLogout,
@@ -58,8 +61,9 @@ export default function Dashboard(props) {
               <section aria-label="Tier visualizer">
                 <TierVisualizer objects={objects} />
               </section>
-              <aside aria-label="Cost overview">
+              <aside aria-label="Cost overview" className="space-y-5">
                 <CostChart history={history} objects={objects} />
+                <ProviderComparison comparison={providerComparison} />
               </aside>
             </div>
 
@@ -101,6 +105,8 @@ export default function Dashboard(props) {
               ) : (
                 <RuleBuilder
                   rules={rules}
+                  templates={ruleTemplates}
+                  onApplyTemplate={onApplyRuleTemplate}
                   onCreateRule={onCreateRule}
                   onUpdateRule={onUpdateRule}
                   onReorderRules={onReorderRules}
@@ -109,6 +115,7 @@ export default function Dashboard(props) {
               )}
             </section>
 
+            <ForecastPanel forecast={forecast} />
             <AuditLog audit={audit} />
           </>
         )}

@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { query, withTransaction } from '../db.js';
 import { TIER_ORDER } from '../engine/costEngine.js';
 import { FILE_TYPES } from '../engine/classification.js';
+import { RULE_TEMPLATES, getTemplate } from '../engine/ruleTemplates.js';
 import { asyncHandler } from '../asyncHandler.js';
 
 const router = Router();
@@ -12,6 +13,45 @@ const VALID_FILE_TYPE = [null, ...FILE_TYPES];
 router.get('/', asyncHandler(async (req, res) => {
   const { rows } = await query('SELECT * FROM rules ORDER BY sort_order ASC');
   res.json(rows);
+}));
+
+router.get('/templates', (req, res) => {
+  res.json(RULE_TEMPLATES.map(({ id, name, description, rules }) => ({
+    id, name, description, rule_count: rules.length,
+  })));
+});
+
+router.post('/templates/:id/apply', asyncHandler(async (req, res) => {
+  const template = getTemplate(req.params.id);
+  if (!template) return res.status(404).json({ error: 'template not found' });
+
+  const { rows: maxRows } = await query('SELECT MAX(sort_order) AS m FROM rules');
+  let nextOrder = (maxRows[0].m ?? -1) + 1;
+
+  const created = await withTransaction(async (client) => {
+    const rows = [];
+    for (const r of template.rules) {
+      const rule = {
+        id: uuidv4(),
+        name: r.name,
+        from_tier: r.from_tier,
+        to_tier: r.action === 'delete' ? null : r.to_tier,
+        condition_days: r.condition_days,
+        action: r.action,
+        sort_order: nextOrder++,
+        file_type: r.file_type || null,
+      };
+      await client.query(
+        `INSERT INTO rules (id, name, from_tier, to_tier, condition_days, action, sort_order, file_type)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [rule.id, rule.name, rule.from_tier, rule.to_tier, rule.condition_days, rule.action, rule.sort_order, rule.file_type]
+      );
+      rows.push(rule);
+    }
+    return rows;
+  });
+
+  res.status(201).json(created);
 }));
 
 router.post('/', asyncHandler(async (req, res) => {
